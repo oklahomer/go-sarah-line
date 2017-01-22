@@ -34,7 +34,7 @@ func main() {
 	    Identifier("hello").
         MatchPattern(regexp.MustCompile(`^\.hello`)).
         Func(func(_ context.Context, input sarah.Input) (*sarah.CommandResponse, error) {
-                return line.NewStringResponse("hello!!"), nil
+                return sarah.NewStringResponse("hello!!"), nil
         }).
         InputExample(".hello").
         MustBuild()
