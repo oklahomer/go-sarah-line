@@ -74,10 +74,10 @@ func (adapter *Adapter) BotType() sarah.BotType {
 	return LINE
 }
 
-func (adapter *Adapter) Run(ctx context.Context, receivedMessage chan<- sarah.Input, errCh chan<- error) {
+func (adapter *Adapter) Run(ctx context.Context, receivedMessage chan<- sarah.Input, errNotifier func(error)) {
 	err := adapter.listen(receivedMessage)
 	if err != nil {
-		log.Errorf("error on listen : %s", err.Error())
+		errNotifier(err)
 	}
 }
 
