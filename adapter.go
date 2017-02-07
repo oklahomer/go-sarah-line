@@ -89,8 +89,6 @@ func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	}
 
 	switch content := output.Content().(type) {
-	case string:
-		adapter.reply(ctx, replyToken, linebot.NewTextMessage(content))
 	case linebot.Message:
 		adapter.reply(ctx, replyToken, content)
 	default:
@@ -190,14 +188,11 @@ func (input *TextInput) ReplyTo() sarah.OutputDestination {
 }
 
 func NewStringResponse(responseContent string) *sarah.CommandResponse {
-	return NewStringResponseWithNext(responseContent, nil)
+	return NewCustomizedResponseWithNext(linebot.NewTextMessage(responseContent), nil)
 }
 
 func NewStringResponseWithNext(responseContent string, next sarah.ContextualFunc) *sarah.CommandResponse {
-	return &sarah.CommandResponse{
-		Content: responseContent,
-		Next:    next,
-	}
+	return NewCustomizedResponseWithNext(linebot.NewTextMessage(responseContent), next)
 }
 
 func NewCustomizedResponse(responseMessage linebot.Message) *sarah.CommandResponse {
