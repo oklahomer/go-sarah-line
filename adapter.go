@@ -89,15 +89,17 @@ func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	}
 
 	switch content := output.Content().(type) {
-	case linebot.Message:
+	case []linebot.Message:
 		adapter.reply(ctx, replyToken, content)
+	case linebot.Message:
+		adapter.reply(ctx, replyToken, []linebot.Message{content})
 	default:
 		log.Warnf("unexpected output %#v", output)
 	}
 }
 
-func (adapter *Adapter) reply(ctx context.Context, replyToken string, message linebot.Message) {
-	call := adapter.client.ReplyMessage(replyToken, message)
+func (adapter *Adapter) reply(ctx context.Context, replyToken string, message []linebot.Message) {
+	call := adapter.client.ReplyMessage(replyToken, message...)
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	call.WithContext(reqCtx)
