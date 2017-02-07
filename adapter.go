@@ -207,3 +207,14 @@ func NewCustomizedResponseWithNext(responseMessage linebot.Message, next sarah.C
 		Next:    next,
 	}
 }
+
+func NewMultipleCustomizedResponses(responseMessages []linebot.Message) *sarah.CommandResponse {
+	return NewMultipleCustomizedResponsesWithNext(responseMessages, nil)
+}
+
+func NewMultipleCustomizedResponsesWithNext(responseMessages []linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
+	return &sarah.CommandResponse{
+		Content: responseMessages,
+		Next:    next,
+	}
+}
