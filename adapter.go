@@ -89,17 +89,17 @@ func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	}
 
 	switch content := output.Content().(type) {
-	case string:
-		adapter.reply(ctx, replyToken, linebot.NewTextMessage(content))
-	case linebot.Message:
+	case []linebot.Message:
 		adapter.reply(ctx, replyToken, content)
+	case linebot.Message:
+		adapter.reply(ctx, replyToken, []linebot.Message{content})
 	default:
 		log.Warnf("unexpected output %#v", output)
 	}
 }
 
-func (adapter *Adapter) reply(ctx context.Context, replyToken string, message linebot.Message) {
-	call := adapter.client.ReplyMessage(replyToken, message)
+func (adapter *Adapter) reply(ctx context.Context, replyToken string, message []linebot.Message) {
+	call := adapter.client.ReplyMessage(replyToken, message...)
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	call.WithContext(reqCtx)
@@ -190,14 +190,11 @@ func (input *TextInput) ReplyTo() sarah.OutputDestination {
 }
 
 func NewStringResponse(responseContent string) *sarah.CommandResponse {
-	return NewStringResponseWithNext(responseContent, nil)
+	return NewCustomizedResponseWithNext(linebot.NewTextMessage(responseContent), nil)
 }
 
 func NewStringResponseWithNext(responseContent string, next sarah.ContextualFunc) *sarah.CommandResponse {
-	return &sarah.CommandResponse{
-		Content: responseContent,
-		Next:    next,
-	}
+	return NewCustomizedResponseWithNext(linebot.NewTextMessage(responseContent), next)
 }
 
 func NewCustomizedResponse(responseMessage linebot.Message) *sarah.CommandResponse {
@@ -207,6 +204,17 @@ func NewCustomizedResponse(responseMessage linebot.Message) *sarah.CommandRespon
 func NewCustomizedResponseWithNext(responseMessage linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
 	return &sarah.CommandResponse{
 		Content: responseMessage,
+		Next:    next,
+	}
+}
+
+func NewMultipleCustomizedResponses(responseMessages []linebot.Message) *sarah.CommandResponse {
+	return NewMultipleCustomizedResponsesWithNext(responseMessages, nil)
+}
+
+func NewMultipleCustomizedResponsesWithNext(responseMessages []linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
+	return &sarah.CommandResponse{
+		Content: responseMessages,
 		Next:    next,
 	}
 }
