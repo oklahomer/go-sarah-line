@@ -14,50 +14,51 @@ import (
 	"os/signal"
 	"regexp"
 	"syscall"
-	"time"
 )
 
 func main() {
-	rootCtx := context.Background()
-	runnerCtx, cancelFunc := context.WithCancel(rootCtx)
-	runner := sarah.NewRunner(sarah.NewConfig())
+        rootCtx := context.Background()
+        runnerCtx, cancelRunner := context.WithCancel(rootCtx)
+        runner := sarah.NewRunner(sarah.NewConfig())
 
-    // Setup bot
-    configBuf, _ := ioutil.ReadFile("/path/to/adapter/config.yaml")
-	lineConfig := line.NewConfig()
-	yaml.Unmarshal(configBuf, lineConfig)
-	lineAdapter := line.NewAdapter(lineConfig)
-	lineBot := sarah.NewBot(lineAdapter, sarah.NewCacheConfig(), "")
+        // Setup bot
+        configBuf, _ := ioutil.ReadFile("/path/to/adapter/config.yaml")
+        lineConfig := line.NewConfig()
+        yaml.Unmarshal(configBuf, lineConfig)
+        lineAdapter := line.NewAdapter(lineConfig)
+        lineBot := sarah.NewBot(lineAdapter, sarah.NewCacheConfig())
 	
-	// Add command(s)
-	echo := sarah.NewCommandBuilder().
-	    Identifier("hello").
-        MatchPattern(regexp.MustCompile(`^\.hello`)).
-        Func(func(_ context.Context, input sarah.Input) (*sarah.CommandResponse, error) {
-                return sarah.NewStringResponse("hello!!"), nil
-        }).
-        InputExample(".hello").
-        MustBuild()
-	lineBot.AppendCommand(echo)
+        // Add command(s)
+        echo := sarah.NewCommandBuilder().
+                Identifier("hello").
+                MatchPattern(regexp.MustCompile(`^\.hello`)).
+                Func(func(_ context.Context, input sarah.Input) (*sarah.CommandResponse, error) {
+                        return line.NewStringResponse("hello!!"), nil
+                }).
+                InputExample(".hello").
+                MustBuild()
+        lineBot.AppendCommand(echo)
 	
-	// Start
-	runner.RegisterBot(lineBot)
-	runner.Run(runnerCtx)
+        // Start
+        runner.RegisterBot(lineBot)
+        runner.Run(runnerCtx)
+        runnerStop := make(chan struct{})
+        go func() {
+                runner.Run(runnerCtx)
+                runnerStop <- struct{}{}
+        }()
 
-	func() {
-		c := make(chan os.Signal, 1)
-		signal.Notify(c, os.Interrupt)
-		signal.Notify(c, syscall.SIGTERM)
+        c := make(chan os.Signal, 1)
+        signal.Notify(c, os.Interrupt)
+        signal.Notify(c, syscall.SIGTERM)
 
-		// Block til signal comes
-		<-c
-
-		log.Info("received signal")
-
-		cancelFunc()
-		time.Sleep(time.Duration(5) * time.Second)
-
-		log.Info("stopped")
-	}()
+        select {
+        case <-c:
+		        log.Info("Canceled Runner.")
+		        cancelRunner()
+        case <-runnerStop:
+                log.Error("Runner stopped.")
+                // Stop because all bots stopped
+	    }
 }
 ```

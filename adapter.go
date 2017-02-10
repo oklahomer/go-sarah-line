@@ -17,7 +17,7 @@ const (
 	LINE sarah.BotType = "line"
 )
 
-type EventHandler func(context.Context, *linebot.Client, []*linebot.Event, func(sarah.Input))
+type EventHandler func(context.Context, *linebot.Client, []*linebot.Event, func(sarah.Input) error)
 
 type Config struct {
 	ChannelToken  string `json:"channel_token" yaml:"channel_token"`
@@ -74,7 +74,7 @@ func (adapter *Adapter) BotType() sarah.BotType {
 	return LINE
 }
 
-func (adapter *Adapter) Run(ctx context.Context, enqueueInput func(sarah.Input), notifyErr func(error)) {
+func (adapter *Adapter) Run(ctx context.Context, enqueueInput func(sarah.Input) error, notifyErr func(error)) {
 	err := adapter.listen(ctx, enqueueInput)
 	if err != nil {
 		notifyErr(err)
@@ -109,7 +109,7 @@ func (adapter *Adapter) reply(ctx context.Context, replyToken string, message []
 	}
 }
 
-func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Input)) error {
+func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Input) error) error {
 	handler, err := httphandler.New(adapter.config.ChannelSecret, adapter.config.ChannelToken)
 	if err != nil {
 		return err
@@ -136,7 +136,7 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 	}
 }
 
-func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot.Event, enqueueInput func(sarah.Input)) {
+func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot.Event, enqueueInput func(sarah.Input) error) {
 	for _, event := range events {
 		if event.Type == linebot.EventTypeMessage {
 			switch message := event.Message.(type) {
