@@ -17,7 +17,7 @@ const (
 	LINE sarah.BotType = "line"
 )
 
-type EventHandler func(context.Context, *linebot.Client, []*linebot.Event, chan<- sarah.Input)
+type EventHandler func(context.Context, *linebot.Client, []*linebot.Event, func(sarah.Input))
 
 type Config struct {
 	ChannelToken  string `json:"channel_token" yaml:"channel_token"`
@@ -74,10 +74,10 @@ func (adapter *Adapter) BotType() sarah.BotType {
 	return LINE
 }
 
-func (adapter *Adapter) Run(ctx context.Context, receivedMessage chan<- sarah.Input, errNotifier func(error)) {
-	err := adapter.listen(ctx, receivedMessage)
+func (adapter *Adapter) Run(ctx context.Context, enqueueInput func(sarah.Input), notifyErr func(error)) {
+	err := adapter.listen(ctx, enqueueInput)
 	if err != nil {
-		errNotifier(err)
+		notifyErr(err)
 	}
 }
 
@@ -109,14 +109,14 @@ func (adapter *Adapter) reply(ctx context.Context, replyToken string, message []
 	}
 }
 
-func (adapter *Adapter) listen(ctx context.Context, receivedMessage chan<- sarah.Input) error {
+func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Input)) error {
 	handler, err := httphandler.New(adapter.config.ChannelSecret, adapter.config.ChannelToken)
 	if err != nil {
 		return err
 	}
 
 	handler.HandleEvents(func(events []*linebot.Event, _ *http.Request) {
-		adapter.eventHandler(ctx, adapter.client, events, receivedMessage)
+		adapter.eventHandler(ctx, adapter.client, events, enqueueInput)
 	})
 	handler.HandleError(func(err error, req *http.Request) {
 		dump, dumpErr := httputil.DumpRequest(req, true)
@@ -136,7 +136,7 @@ func (adapter *Adapter) listen(ctx context.Context, receivedMessage chan<- sarah
 	}
 }
 
-func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot.Event, receivedMessage chan<- sarah.Input) {
+func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot.Event, enqueueInput func(sarah.Input)) {
 	for _, event := range events {
 		if event.Type == linebot.EventTypeMessage {
 			switch message := event.Message.(type) {
@@ -159,7 +159,7 @@ func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot
 					replyToken: event.ReplyToken,
 					timestamp:  event.Timestamp,
 				}
-				receivedMessage <- input
+				enqueueInput(input)
 			}
 		}
 	}
