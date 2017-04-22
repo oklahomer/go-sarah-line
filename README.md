@@ -17,19 +17,20 @@ import (
 )
 
 func main() {
-        rootCtx := context.Background()
-        runnerCtx, cancelRunner := context.WithCancel(rootCtx)
-        runner := sarah.NewRunner(sarah.NewConfig())
+        options := sarah.NewRunnerOptions()
 
         // Setup bot
         configBuf, _ := ioutil.ReadFile("/path/to/adapter/config.yaml")
         lineConfig := line.NewConfig()
         yaml.Unmarshal(configBuf, lineConfig)
         lineAdapter := line.NewAdapter(lineConfig)
-        lineBot := sarah.NewBot(lineAdapter, sarah.NewCacheConfig())
+        storage := sarah.NewUserContextStorage(sarah.NewCacheConfig())
+        lineBot, _ := sarah.NewBot(lineAdapter, sarah.BotWithStorage(storage))
+        options.Append(sarah.WithBot(lineBot))
 	
         // Add command(s)
-        echo := sarah.NewCommandBuilder().
+        echo := sarah.NewCommandPropsBuilder().
+                BotType(line.LINE).
                 Identifier("hello").
                 MatchPattern(regexp.MustCompile(`^\.hello`)).
                 Func(func(_ context.Context, input sarah.Input) (*sarah.CommandResponse, error) {
@@ -38,9 +39,12 @@ func main() {
                 InputExample(".hello").
                 MustBuild()
         lineBot.AppendCommand(echo)
+        options.Append(sarah.WithCommandProps(echo))
 	
         // Start
-        runner.RegisterBot(lineBot)
+        rootCtx := context.Background()
+        runnerCtx, cancelRunner := context.WithCancel(rootCtx)
+        runner, _ := sarah.NewRunner(sarah.NewConfig(), options.Arg())
         runner.Run(runnerCtx)
         runnerStop := make(chan struct{})
         go func() {

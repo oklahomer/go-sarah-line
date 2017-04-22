@@ -22,6 +22,8 @@ type EventHandler func(context.Context, *linebot.Client, []*linebot.Event, func(
 type Config struct {
 	ChannelToken  string `json:"channel_token" yaml:"channel_token"`
 	ChannelSecret string `json:"channel_secret" yaml:"channel_secret"`
+	HelpCommand   string `json:"help_command" yaml:"help_command"`
+	AbortCommand  string `json:"abort_command" yaml:"abort_command"`
 	Port          int    `json:"port" yaml:"port"`
 	Endpoint      string `json:"endpoint" yaml:"endpoint"`
 	TLS           *struct {
@@ -38,6 +40,8 @@ func NewConfig() *Config {
 	return &Config{
 		ChannelToken:  "",
 		ChannelSecret: "",
+		HelpCommand:   ".help",
+		AbortCommand:  ".abort",
 		Port:          8080,
 		Endpoint:      "/callback",
 		TLS:           nil,
@@ -203,8 +207,8 @@ func NewCustomizedResponse(responseMessage linebot.Message) *sarah.CommandRespon
 
 func NewCustomizedResponseWithNext(responseMessage linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
 	return &sarah.CommandResponse{
-		Content: responseMessage,
-		Next:    next,
+		Content:     responseMessage,
+		UserContext: sarah.NewUserContext(next),
 	}
 }
 
@@ -214,7 +218,7 @@ func NewMultipleCustomizedResponses(responseMessages []linebot.Message) *sarah.C
 
 func NewMultipleCustomizedResponsesWithNext(responseMessages []linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
 	return &sarah.CommandResponse{
-		Content: responseMessages,
-		Next:    next,
+		Content:     responseMessages,
+		UserContext: sarah.NewUserContext(next),
 	}
 }
