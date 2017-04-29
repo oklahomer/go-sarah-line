@@ -9,6 +9,7 @@ import (
 	"golang.org/x/net/context"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"time"
 )
 
@@ -17,7 +18,7 @@ const (
 	LINE sarah.BotType = "line"
 )
 
-type EventHandler func(context.Context, *linebot.Client, []*linebot.Event, func(sarah.Input) error)
+type EventHandler func(context.Context, *Config, []*linebot.Event, func(sarah.Input) error)
 
 type Config struct {
 	ChannelToken  string `json:"channel_token" yaml:"channel_token"`
@@ -49,29 +50,53 @@ func NewConfig() *Config {
 	}
 }
 
+// AdapterOption defines function signature that Adapter's functional option must satisfy.
+type AdapterOption func(adapter *Adapter) error
+
+func WithClient(client *linebot.Client) AdapterOption {
+	return func(adapter *Adapter) error {
+		adapter.client = client
+		return nil
+	}
+}
+
+func WithEventhandler(handler EventHandler) AdapterOption {
+	return func(adapter *Adapter) error {
+		adapter.eventHandler = handler
+		return nil
+	}
+}
+
 type Adapter struct {
 	client       *linebot.Client
 	eventHandler EventHandler
 	config       *Config
 }
 
-func NewAdapter(config *Config) *Adapter {
-	client, err := linebot.New(config.ChannelSecret, config.ChannelToken, config.ClientOptions...)
-	if err != nil {
-		panic(fmt.Sprintf("Error on linebot.Client construction: %s", err.Error()))
-	}
-
-	return &Adapter{
-		client:       client,
-		eventHandler: defaultEventHandler,
+func NewAdapter(config *Config, options ...AdapterOption) (*Adapter, error) {
+	adapter := &Adapter{
 		config:       config,
+		eventHandler: defaultEventHandler, // may be replaced with WithEventHandler option.
 	}
-}
 
-func NewAdapterWithHandler(config *Config, handler EventHandler) *Adapter {
-	adapter := NewAdapter(config)
-	adapter.eventHandler = handler
-	return adapter
+	for _, opt := range options {
+		err := opt(adapter)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// See if client is set by WithClient option.
+	// If not, use given configuration
+	if adapter.client == nil {
+		client, err := linebot.New(config.ChannelSecret, config.ChannelToken, config.ClientOptions...)
+		if err != nil {
+			return nil, fmt.Errorf("error on linebot.Client construction: %s.", err.Error())
+		}
+		adapter.client = client
+	}
+
+	return adapter, nil
 }
 
 func (adapter *Adapter) BotType() sarah.BotType {
@@ -95,8 +120,17 @@ func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	switch content := output.Content().(type) {
 	case []linebot.Message:
 		adapter.reply(ctx, replyToken, content)
+
 	case linebot.Message:
 		adapter.reply(ctx, replyToken, []linebot.Message{content})
+
+	case *sarah.CommandHelps:
+		messages := []linebot.Message{}
+		for _, commandHelp := range *content {
+			messages = append(messages, linebot.NewTextMessage(commandHelp.InputExample))
+		}
+		adapter.reply(ctx, replyToken, messages)
+
 	default:
 		log.Warnf("unexpected output %#v", output)
 	}
@@ -120,7 +154,7 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 	}
 
 	handler.HandleEvents(func(events []*linebot.Event, _ *http.Request) {
-		adapter.eventHandler(ctx, adapter.client, events, enqueueInput)
+		adapter.eventHandler(ctx, adapter.config, events, enqueueInput)
 	})
 	handler.HandleError(func(err error, req *http.Request) {
 		dump, dumpErr := httputil.DumpRequest(req, true)
@@ -140,7 +174,7 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 	}
 }
 
-func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot.Event, enqueueInput func(sarah.Input) error) {
+func defaultEventHandler(_ context.Context, config *Config, events []*linebot.Event, enqueueInput func(sarah.Input) error) {
 	for _, event := range events {
 		if event.Type == linebot.EventTypeMessage {
 			switch message := event.Message.(type) {
@@ -163,7 +197,23 @@ func defaultEventHandler(_ context.Context, _ *linebot.Client, events []*linebot
 					replyToken: event.ReplyToken,
 					timestamp:  event.Timestamp,
 				}
-				enqueueInput(input)
+
+				trimmed := strings.TrimSpace(input.Message())
+				if config.HelpCommand != "" && trimmed == config.HelpCommand {
+					// Help command
+					help := sarah.NewHelpInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo())
+					enqueueInput(help)
+
+				} else if config.AbortCommand != "" && trimmed == config.AbortCommand {
+					// Abort command
+					abort := sarah.NewAbortInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo())
+					enqueueInput(abort)
+
+				} else {
+					// Regular input
+					enqueueInput(input)
+
+				}
 			}
 		}
 	}
