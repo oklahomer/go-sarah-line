@@ -4,16 +4,16 @@ LINE adapter for [sarah](https://github.com/oklahomer/go-sarah).
 package main
 
 import (
-	"github.com/oklahomer/go-sarah"
-	"github.com/oklahomer/go-sarah-line"
-	"github.com/oklahomer/go-sarah/log"
-	"golang.org/x/net/context"
-    "gopkg.in/yaml.v2"
-	"io/ioutil"
-	"os"
-	"os/signal"
-	"regexp"
-	"syscall"
+        "github.com/oklahomer/go-sarah"
+        "github.com/oklahomer/go-sarah-line"
+        "github.com/oklahomer/go-sarah/log"
+        "golang.org/x/net/context"
+        "gopkg.in/yaml.v2"
+        "io/ioutil"
+        "os"
+        "os/signal"
+        "regexp"
+        "syscall"
 )
 
 func main() {
@@ -23,7 +23,7 @@ func main() {
         configBuf, _ := ioutil.ReadFile("/path/to/adapter/config.yaml")
         lineConfig := line.NewConfig()
         yaml.Unmarshal(configBuf, lineConfig)
-        lineAdapter := line.NewAdapter(lineConfig)
+        lineAdapter, _ := line.NewAdapter(lineConfig)
         storage := sarah.NewUserContextStorage(sarah.NewCacheConfig())
         lineBot, _ := sarah.NewBot(lineAdapter, sarah.BotWithStorage(storage))
         options.Append(sarah.WithBot(lineBot))
