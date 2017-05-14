@@ -263,7 +263,10 @@ func NewCustomizedResponseWithNext(responseMessage linebot.Message, next sarah.C
 }
 
 func NewMultipleCustomizedResponses(responseMessages []linebot.Message) *sarah.CommandResponse {
-	return NewMultipleCustomizedResponsesWithNext(responseMessages, nil)
+	return &sarah.CommandResponse{
+		Content:     responseMessages,
+		UserContext: nil,
+	}
 }
 
 func NewMultipleCustomizedResponsesWithNext(responseMessages []linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
