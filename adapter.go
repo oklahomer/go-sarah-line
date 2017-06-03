@@ -1,6 +1,7 @@
 package line
 
 import (
+	"errors"
 	"fmt"
 	"github.com/line/line-bot-sdk-go/linebot"
 	"github.com/line/line-bot-sdk-go/linebot/httphandler"
@@ -18,8 +19,7 @@ const (
 	LINE sarah.BotType = "line"
 )
 
-type EventHandler func(context.Context, *Config, []*linebot.Event, func(sarah.Input) error)
-
+// Config contains some configuration variables for line Adapter.
 type Config struct {
 	ChannelToken  string `json:"channel_token" yaml:"channel_token"`
 	ChannelSecret string `json:"channel_secret" yaml:"channel_secret"`
@@ -53,6 +53,7 @@ func NewConfig() *Config {
 // AdapterOption defines function signature that Adapter's functional option must satisfy.
 type AdapterOption func(adapter *Adapter) error
 
+// WithClient creates AdapterOption with given *linebot.Client.
 func WithClient(client *linebot.Client) AdapterOption {
 	return func(adapter *Adapter) error {
 		adapter.client = client
@@ -60,19 +61,23 @@ func WithClient(client *linebot.Client) AdapterOption {
 	}
 }
 
-func WithEventhandler(handler EventHandler) AdapterOption {
+// WithEventHandler creates AdapterOption with given function.
+// This function is called on event reception.
+func WithEventHandler(handler func(context.Context, *Config, []*linebot.Event, func(sarah.Input) error)) AdapterOption {
 	return func(adapter *Adapter) error {
 		adapter.eventHandler = handler
 		return nil
 	}
 }
 
+// Adapter internally starts HTTP server to receive call from LINE.
 type Adapter struct {
 	client       *linebot.Client
-	eventHandler EventHandler
+	eventHandler func(context.Context, *Config, []*linebot.Event, func(sarah.Input) error)
 	config       *Config
 }
 
+// NewAdapter creates new Adapter with given *Config and zero or more AdapterOption.
 func NewAdapter(config *Config, options ...AdapterOption) (*Adapter, error) {
 	adapter := &Adapter{
 		config:       config,
@@ -99,10 +104,12 @@ func NewAdapter(config *Config, options ...AdapterOption) (*Adapter, error) {
 	return adapter, nil
 }
 
+// BotType returns BotType of this particular instance.
 func (adapter *Adapter) BotType() sarah.BotType {
 	return LINE
 }
 
+// Run starts HTTP server to handle incoming request from LINE.
 func (adapter *Adapter) Run(ctx context.Context, enqueueInput func(sarah.Input) error, notifyErr func(error)) {
 	err := adapter.listen(ctx, enqueueInput)
 	if err != nil {
@@ -110,6 +117,7 @@ func (adapter *Adapter) Run(ctx context.Context, enqueueInput func(sarah.Input) 
 	}
 }
 
+// SendMessage let Bot send message to LINE.
 func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	replyToken, ok := output.Destination().(string)
 	if !ok {
@@ -161,7 +169,7 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 		if dumpErr == nil {
 			log.Errorf("error on reqeust parsing and/or signature validation. error: %s. request: %s.", err.Error(), dump)
 		} else {
-			log.Errorf("error on reqeust parsing and/or signature validation: %s. request: %s.", err.Error())
+			log.Errorf("error on reqeust parsing and/or signature validation: %s.", err.Error())
 		}
 	})
 
@@ -169,92 +177,430 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 	addr := fmt.Sprintf(":%d", adapter.config.Port)
 	if adapter.config.TLS == nil {
 		return http.ListenAndServe(addr, nil)
-	} else {
-		return http.ListenAndServeTLS(addr, adapter.config.TLS.CertFile, adapter.config.TLS.KeyFile, nil)
 	}
+
+	return http.ListenAndServeTLS(addr, adapter.config.TLS.CertFile, adapter.config.TLS.KeyFile, nil)
 }
 
 func defaultEventHandler(_ context.Context, config *Config, events []*linebot.Event, enqueueInput func(sarah.Input) error) {
 	for _, event := range events {
-		if event.Type == linebot.EventTypeMessage {
-			switch message := event.Message.(type) {
-			case *linebot.TextMessage:
-				var senderKey string
-				if event.Source.Type == linebot.EventSourceTypeUser {
-					senderKey = fmt.Sprintf("user|%s", event.Source.UserID)
-				} else if event.Source.Type == linebot.EventSourceTypeRoom {
-					senderKey = fmt.Sprintf("room|%s", event.Source.RoomID)
-				} else if event.Source.Type == linebot.EventSourceTypeGroup {
-					senderKey = fmt.Sprintf("group|%s", event.Source.GroupID)
-				} else {
-					log.Errorf("Unrecognized event source type: %s", event.Source.Type)
-					continue
-				}
-
-				input := &TextInput{
-					senderKey:  senderKey,
-					text:       message.Text,
-					replyToken: event.ReplyToken,
-					timestamp:  event.Timestamp,
-				}
-
-				trimmed := strings.TrimSpace(input.Message())
-				if config.HelpCommand != "" && trimmed == config.HelpCommand {
-					// Help command
-					help := sarah.NewHelpInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo())
-					enqueueInput(help)
-
-				} else if config.AbortCommand != "" && trimmed == config.AbortCommand {
-					// Abort command
-					abort := sarah.NewAbortInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo())
-					enqueueInput(abort)
-
-				} else {
-					// Regular input
-					enqueueInput(input)
-
-				}
+		if event.Type == linebot.EventTypeMessage || event.Type == linebot.EventTypePostback {
+			input, err := EventToUserInput(config, event)
+			if err != nil {
+				log.Errorf("Error on event handling: %s.", err.Error())
+				continue
 			}
+
+			enqueueInput(input)
 		}
 	}
 }
 
-// TextInput satisfies sarah.Input interface
+// EventToUserInput converts linebot.Event to a corresponding struct that implements sarah.Input.
+//
+// This does not treat Follow, Unfollow, Join, Leave, or Beacon as *user input*.
+// It is nonsense to pass uniformed state change event to sarah.Commands and find corresponding sarah.Command.
+// To handle those events, pass customized event handler on Adapter construction via WithEventHandler.
+func EventToUserInput(config *Config, event *linebot.Event) (sarah.Input, error) {
+	sourceType := event.Source.Type
+	senderKey, err := SourceToSenderKey(event.Source)
+	if err != nil {
+		return nil, err
+	}
+
+	if event.Type == linebot.EventTypeMessage {
+		switch message := event.Message.(type) {
+		case *linebot.TextMessage:
+			input := &TextInput{
+				sourceType: sourceType,
+				ID:         message.ID,
+				senderKey:  senderKey,
+				text:       message.Text,
+				replyToken: event.ReplyToken,
+				timestamp:  event.Timestamp,
+			}
+
+			trimmed := strings.TrimSpace(message.Text)
+			if config.HelpCommand != "" && trimmed == config.HelpCommand {
+				// Help command
+				return sarah.NewHelpInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+
+			} else if config.AbortCommand != "" && trimmed == config.AbortCommand {
+				// Abort command
+				return sarah.NewAbortInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+
+			}
+
+			return input, nil
+
+		case *linebot.ImageMessage:
+			return &FileInput{
+				sourceType: sourceType,
+				Type:       linebot.MessageTypeImage,
+				ID:         message.ID,
+				senderKey:  senderKey,
+				replyToken: event.ReplyToken,
+				timestamp:  event.Timestamp,
+			}, nil
+
+		case *linebot.VideoMessage:
+			return &FileInput{
+				sourceType: sourceType,
+				Type:       linebot.MessageTypeVideo,
+				ID:         message.ID,
+				senderKey:  senderKey,
+				replyToken: event.ReplyToken,
+				timestamp:  event.Timestamp,
+			}, nil
+
+		case *linebot.AudioMessage:
+			return &FileInput{
+				sourceType: sourceType,
+				Type:       linebot.MessageTypeAudio,
+				ID:         message.ID,
+				senderKey:  senderKey,
+				replyToken: event.ReplyToken,
+				timestamp:  event.Timestamp,
+			}, nil
+
+		case *linebot.LocationMessage:
+			return &LocationInput{
+				sourceType: sourceType,
+				ID:         message.ID,
+				Location: &Location{
+					Title:     message.Title,
+					Address:   message.Address,
+					Latitude:  message.Latitude,
+					Longitude: message.Longitude,
+				},
+				senderKey:  senderKey,
+				replyToken: event.ReplyToken,
+				timestamp:  event.Timestamp,
+			}, nil
+
+		case *linebot.StickerMessage:
+			return &StickerInput{
+				sourceType: sourceType,
+				ID:         message.ID,
+
+				PackageID: message.PackageID,
+				StickerID: message.StickerID,
+
+				senderKey:  senderKey,
+				replyToken: event.ReplyToken,
+				timestamp:  event.Timestamp,
+			}, nil
+
+		default:
+			return nil, fmt.Errorf("Unknown message type: %T", event.Message)
+		}
+
+	} else if event.Type == linebot.EventTypePostback {
+		postback := event.Postback
+		input := &PostbackEvent{
+			sourceType: sourceType,
+			senderKey:  senderKey,
+			data:       postback.Data,
+			replyToken: event.ReplyToken,
+			timestamp:  event.Timestamp,
+		}
+
+		trimmed := strings.TrimSpace(input.Message())
+		if config.HelpCommand != "" && trimmed == config.HelpCommand {
+			// Help command
+			return sarah.NewHelpInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+
+		} else if config.AbortCommand != "" && trimmed == config.AbortCommand {
+			// Abort command
+			return sarah.NewAbortInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+
+		}
+
+		return input, nil
+	}
+
+	return nil, fmt.Errorf("%T can not be treated as user input", event)
+}
+
+// ErrUnrecognizedEventSource indicates unrecognizable linebot.EventSourceType.
+var ErrUnrecognizedEventSource = errors.New("unrecognized event source type is given")
+
+// SourceToSenderKey generates unique sender key from given event.
+// https://devdocs.line.me/en/#webhook-event-object
+func SourceToSenderKey(s *linebot.EventSource) (string, error) {
+	if s.Type == linebot.EventSourceTypeUser {
+		return fmt.Sprintf("user|%s", s.UserID), nil
+	} else if s.Type == linebot.EventSourceTypeRoom {
+		return fmt.Sprintf("room|%s", s.RoomID), nil
+	} else if s.Type == linebot.EventSourceTypeGroup {
+		return fmt.Sprintf("group|%s", s.GroupID), nil
+	}
+
+	return "", ErrUnrecognizedEventSource
+}
+
+// TextInput represents text message sent from LINE.
 type TextInput struct {
+	ID string
+
+	sourceType linebot.EventSourceType
 	senderKey  string
 	text       string
 	replyToken string
 	timestamp  time.Time
 }
 
+// SenderKey returns string representing message sender.
 func (input *TextInput) SenderKey() string {
 	return input.senderKey
 }
 
+// Message returns sent message.
 func (input *TextInput) Message() string {
 	return input.text
 }
 
+// SentAt returns message event's timestamp.
 func (input *TextInput) SentAt() time.Time {
 	return input.timestamp
 }
 
+// ReplyTo returns token to send reply.
 func (input *TextInput) ReplyTo() sarah.OutputDestination {
 	return input.replyToken
 }
 
-func NewStringResponse(responseContent string) *sarah.CommandResponse {
-	return NewCustomizedResponseWithNext(linebot.NewTextMessage(responseContent), nil)
+// SourceType returns this event's linebot.EventSourceType.
+// All events in LINE Adapter implement SourceTyper, so this is safe to apply type assertion against sarah.Input and see corresponding source type.
+func (input *TextInput) SourceType() linebot.EventSourceType {
+	return input.sourceType
 }
 
+// FileInput represents file message sent from LINE.
+type FileInput struct {
+	// Type is one of MessageTypeImage, MessageTypeVideo, MessageTypeAudio
+	Type linebot.MessageType
+	ID   string
+
+	sourceType linebot.EventSourceType
+	senderKey  string
+	replyToken string
+	timestamp  time.Time
+}
+
+// SenderKey returns string representing message sender.
+func (input *FileInput) SenderKey() string {
+	return input.senderKey
+}
+
+// Message returns sent message, which is empty in this case.
+func (input *FileInput) Message() string {
+	return ""
+}
+
+// SentAt returns message event's timestamp.
+func (input *FileInput) SentAt() time.Time {
+	return input.timestamp
+}
+
+// ReplyTo returns token to send reply.
+func (input *FileInput) ReplyTo() sarah.OutputDestination {
+	return input.replyToken
+}
+
+// SourceType returns this event's linebot.EventSourceType.
+// All events in LINE Adapter implement SourceTyper, so this is safe to apply type assertion against sarah.Input and see corresponding source type.
+func (input *FileInput) SourceType() linebot.EventSourceType {
+	return input.sourceType
+}
+
+// Location represents location being sent.
+type Location struct {
+	Title     string
+	Address   string
+	Latitude  float64
+	Longitude float64
+}
+
+// LocationInput represents location message sent from LINE.
+type LocationInput struct {
+	ID       string
+	Location *Location
+
+	sourceType linebot.EventSourceType
+	senderKey  string
+	replyToken string
+	timestamp  time.Time
+}
+
+// SenderKey returns string representing message sender.
+func (input *LocationInput) SenderKey() string {
+	return input.senderKey
+}
+
+// Message returns sent message.
+func (input *LocationInput) Message() string {
+	return input.Location.Title
+}
+
+// SentAt returns message event's timestamp.
+func (input *LocationInput) SentAt() time.Time {
+	return input.timestamp
+}
+
+// ReplyTo returns token to send reply.
+func (input *LocationInput) ReplyTo() sarah.OutputDestination {
+	return input.replyToken
+}
+
+// SourceType returns this event's linebot.EventSourceType.
+// All events in LINE Adapter implement SourceTyper, so this is safe to apply type assertion against sarah.Input and see corresponding source type.
+func (input *LocationInput) SourceType() linebot.EventSourceType {
+	return input.sourceType
+}
+
+// StickerInput represents sticker message sent from LINE.
+type StickerInput struct {
+	ID        string
+	PackageID string
+	StickerID string
+
+	sourceType linebot.EventSourceType
+	senderKey  string
+	replyToken string
+	timestamp  time.Time
+}
+
+// SenderKey returns string representing message sender.
+func (input *StickerInput) SenderKey() string {
+	return input.senderKey
+}
+
+// Message returns sent message, which is empty in this case.
+func (input *StickerInput) Message() string {
+	return ""
+}
+
+// SentAt returns message event's timestamp.
+func (input *StickerInput) SentAt() time.Time {
+	return input.timestamp
+}
+
+// ReplyTo returns token to send reply.
+func (input *StickerInput) ReplyTo() sarah.OutputDestination {
+	return input.replyToken
+}
+
+// SourceType returns this event's linebot.EventSourceType.
+// All events in LINE Adapter implement SourceTyper, so this is safe to apply type assertion against sarah.Input and see corresponding source type.
+func (input *StickerInput) SourceType() linebot.EventSourceType {
+	return input.sourceType
+}
+
+// PostbackEvent represents postback event sent from LINE.
+type PostbackEvent struct {
+	sourceType linebot.EventSourceType
+	senderKey  string
+	data       string
+	replyToken string
+	timestamp  time.Time
+}
+
+// SenderKey returns string representing message sender.
+func (input *PostbackEvent) SenderKey() string {
+	return input.senderKey
+}
+
+// Message returns sent message.
+func (input *PostbackEvent) Message() string {
+	return input.data
+}
+
+// SentAt returns message event's timestamp.
+func (input *PostbackEvent) SentAt() time.Time {
+	return input.timestamp
+}
+
+// ReplyTo returns token to send reply.
+func (input *PostbackEvent) ReplyTo() sarah.OutputDestination {
+	return input.replyToken
+}
+
+// SourceType returns this event's linebot.EventSourceType.
+// All events in LINE Adapter implement SourceTyper, so this is safe to apply type assertion against sarah.Input and see corresponding source type.
+func (input *PostbackEvent) SourceType() linebot.EventSourceType {
+	return input.sourceType
+}
+
+// SourceTyper is an interface that returns event's linebot.EventSourceType
+type SourceTyper interface {
+	SourceType() linebot.EventSourceType
+}
+
+// Make sure All input types implements SourceTyper and sarah.Input
+var _ SourceTyper = (*TextInput)(nil)
+var _ SourceTyper = (*FileInput)(nil)
+var _ SourceTyper = (*StickerInput)(nil)
+var _ SourceTyper = (*LocationInput)(nil)
+var _ SourceTyper = (*PostbackEvent)(nil)
+var _ sarah.Input = (*TextInput)(nil)
+var _ sarah.Input = (*FileInput)(nil)
+var _ sarah.Input = (*StickerInput)(nil)
+var _ sarah.Input = (*LocationInput)(nil)
+var _ sarah.Input = (*PostbackEvent)(nil)
+
+// IsSourceUser checks given input and return true if the given input sender is user.
+func IsSourceUser(input interface{}) bool {
+	typer, ok := input.(SourceTyper)
+	if !ok {
+		return false
+	}
+
+	return typer.SourceType() == linebot.EventSourceTypeUser
+}
+
+// IsSourceRoom checks given input and return true if the given input sender is room.
+func IsSourceRoom(input interface{}) bool {
+	typer, ok := input.(SourceTyper)
+	if !ok {
+		return false
+	}
+
+	return typer.SourceType() == linebot.EventSourceTypeRoom
+}
+
+// IsSourceGroup checks given input and return true if the given input sender is group.
+func IsSourceGroup(input interface{}) bool {
+	typer, ok := input.(SourceTyper)
+	if !ok {
+		return false
+	}
+
+	return typer.SourceType() == linebot.EventSourceTypeGroup
+}
+
+// NewStringResponse creates new sarah.CommandResponse instance with given string.
+func NewStringResponse(responseContent string) *sarah.CommandResponse {
+	return &sarah.CommandResponse{
+		Content:     linebot.NewTextMessage(responseContent),
+		UserContext: nil,
+	}
+}
+
+// NewStringResponseWithNext creates new sarah.CommandResponse instance with given string and next function to continue.
 func NewStringResponseWithNext(responseContent string, next sarah.ContextualFunc) *sarah.CommandResponse {
 	return NewCustomizedResponseWithNext(linebot.NewTextMessage(responseContent), next)
 }
 
+// NewCustomizedResponse creates new sarah.CommandResponse instance with given linebot.Message.
 func NewCustomizedResponse(responseMessage linebot.Message) *sarah.CommandResponse {
-	return NewCustomizedResponseWithNext(responseMessage, nil)
+	return &sarah.CommandResponse{
+		Content:     responseMessage,
+		UserContext: nil,
+	}
 }
 
+// NewCustomizedResponseWithNext creates new sarah.CommandResponse instance with given linebot.Message and next function to continue.
 func NewCustomizedResponseWithNext(responseMessage linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
 	return &sarah.CommandResponse{
 		Content:     responseMessage,
@@ -262,6 +608,7 @@ func NewCustomizedResponseWithNext(responseMessage linebot.Message, next sarah.C
 	}
 }
 
+// NewMultipleCustomizedResponses creates new sarah.CommandResponse instance with given []linebot.Message.
 func NewMultipleCustomizedResponses(responseMessages []linebot.Message) *sarah.CommandResponse {
 	return &sarah.CommandResponse{
 		Content:     responseMessages,
@@ -269,6 +616,7 @@ func NewMultipleCustomizedResponses(responseMessages []linebot.Message) *sarah.C
 	}
 }
 
+// NewMultipleCustomizedResponsesWithNext creates new sarah.CommandResponse instance with given []linebot.Message with next function to continue.
 func NewMultipleCustomizedResponsesWithNext(responseMessages []linebot.Message, next sarah.ContextualFunc) *sarah.CommandResponse {
 	return &sarah.CommandResponse{
 		Content:     responseMessages,
