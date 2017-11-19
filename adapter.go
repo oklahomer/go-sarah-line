@@ -297,7 +297,16 @@ func EventToUserInput(config *Config, event *linebot.Event) (sarah.Input, error)
 
 	} else if event.Type == linebot.EventTypePostback {
 		postback := event.Postback
+		var params *PostbackParams
+		if postback.Params != nil {
+			params = &PostbackParams{
+				Date:     postback.Params.Date,
+				Time:     postback.Params.Time,
+				Datetime: postback.Params.Datetime,
+			}
+		}
 		input := &PostbackEvent{
+			Params:     params,
 			sourceType: sourceType,
 			senderKey:  senderKey,
 			data:       postback.Data,
@@ -497,8 +506,20 @@ func (input *StickerInput) SourceType() linebot.EventSourceType {
 	return input.sourceType
 }
 
+// PostbackParams includes some datetime related parameters set by user.
+// This is set when and only when user picks datetime via datetime picker action.
+//
+// ref. https://developers.line.me/en/docs/messaging-api/reference/#postback-params-object
+type PostbackParams struct {
+	Date     string
+	Time     string
+	Datetime string
+}
+
 // PostbackEvent represents postback event sent from LINE.
 type PostbackEvent struct {
+	Params *PostbackParams
+
 	sourceType linebot.EventSourceType
 	senderKey  string
 	data       string
