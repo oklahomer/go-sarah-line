@@ -96,7 +96,7 @@ func NewAdapter(config *Config, options ...AdapterOption) (*Adapter, error) {
 	if adapter.client == nil {
 		client, err := linebot.New(config.ChannelSecret, config.ChannelToken, config.ClientOptions...)
 		if err != nil {
-			return nil, fmt.Errorf("error on linebot.Client construction: %s.", err.Error())
+			return nil, fmt.Errorf("error on linebot.Client construction: %s", err.Error())
 		}
 		adapter.client = client
 	}
@@ -167,9 +167,9 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 	handler.HandleError(func(err error, req *http.Request) {
 		dump, dumpErr := httputil.DumpRequest(req, true)
 		if dumpErr == nil {
-			log.Errorf("error on reqeust parsing and/or signature validation. error: %s. request: %s.", err.Error(), dump)
+			log.Errorf("error on request parsing and/or signature validation. error: %s. request: %s.", err.Error(), dump)
 		} else {
-			log.Errorf("error on reqeust parsing and/or signature validation: %s.", err.Error())
+			log.Errorf("error on request parsing and/or signature validation: %s.", err.Error())
 		}
 	})
 
@@ -292,7 +292,7 @@ func EventToUserInput(config *Config, event *linebot.Event) (sarah.Input, error)
 			}, nil
 
 		default:
-			return nil, fmt.Errorf("Unknown message type: %T", event.Message)
+			return nil, fmt.Errorf("unknown message type: %T", event.Message)
 		}
 
 	} else if event.Type == linebot.EventTypePostback {
