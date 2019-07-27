@@ -1,13 +1,13 @@
 package line
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/line/line-bot-sdk-go/linebot"
 	"github.com/line/line-bot-sdk-go/linebot/httphandler"
-	"github.com/oklahomer/go-sarah"
-	"github.com/oklahomer/go-sarah/log"
-	"golang.org/x/net/context"
+	"github.com/oklahomer/go-sarah/v2"
+	"github.com/oklahomer/go-sarah/v2/log"
 	"net/http"
 	"net/http/httputil"
 	"strings"
@@ -77,6 +77,8 @@ type Adapter struct {
 	config       *Config
 }
 
+var _ sarah.Adapter = (*Adapter)(nil)
+
 // NewAdapter creates new Adapter with given *Config and zero or more AdapterOption.
 func NewAdapter(config *Config, options ...AdapterOption) (*Adapter, error) {
 	adapter := &Adapter{
@@ -126,16 +128,16 @@ func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	}
 
 	switch content := output.Content().(type) {
-	case []linebot.Message:
+	case []linebot.SendingMessage:
 		adapter.reply(ctx, replyToken, content)
 
-	case linebot.Message:
-		adapter.reply(ctx, replyToken, []linebot.Message{content})
+	case linebot.SendingMessage:
+		adapter.reply(ctx, replyToken, []linebot.SendingMessage{content})
 
 	case *sarah.CommandHelps:
-		messages := []linebot.Message{}
+		var messages []linebot.SendingMessage
 		for _, commandHelp := range *content {
-			messages = append(messages, linebot.NewTextMessage(commandHelp.InputExample))
+			messages = append(messages, linebot.NewTextMessage(commandHelp.Instruction))
 		}
 		adapter.reply(ctx, replyToken, messages)
 
@@ -144,7 +146,7 @@ func (adapter *Adapter) SendMessage(ctx context.Context, output sarah.Output) {
 	}
 }
 
-func (adapter *Adapter) reply(ctx context.Context, replyToken string, message []linebot.Message) {
+func (adapter *Adapter) reply(ctx context.Context, replyToken string, message []linebot.SendingMessage) {
 	call := adapter.client.ReplyMessage(replyToken, message...)
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -223,11 +225,11 @@ func EventToUserInput(config *Config, event *linebot.Event) (sarah.Input, error)
 			trimmed := strings.TrimSpace(message.Text)
 			if config.HelpCommand != "" && trimmed == config.HelpCommand {
 				// Help command
-				return sarah.NewHelpInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+				return sarah.NewHelpInput(input), nil
 
 			} else if config.AbortCommand != "" && trimmed == config.AbortCommand {
 				// Abort command
-				return sarah.NewAbortInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+				return sarah.NewAbortInput(input), nil
 
 			}
 
@@ -317,11 +319,11 @@ func EventToUserInput(config *Config, event *linebot.Event) (sarah.Input, error)
 		trimmed := strings.TrimSpace(input.Message())
 		if config.HelpCommand != "" && trimmed == config.HelpCommand {
 			// Help command
-			return sarah.NewHelpInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+			return sarah.NewHelpInput(input), nil
 
 		} else if config.AbortCommand != "" && trimmed == config.AbortCommand {
 			// Abort command
-			return sarah.NewAbortInput(input.SenderKey(), input.Message(), input.SentAt(), input.ReplyTo()), nil
+			return sarah.NewAbortInput(input), nil
 
 		}
 
@@ -337,15 +339,20 @@ var ErrUnrecognizedEventSource = errors.New("unrecognized event source type is g
 // SourceToSenderKey generates unique sender key from given event.
 // https://devdocs.line.me/en/#webhook-event-object
 func SourceToSenderKey(s *linebot.EventSource) (string, error) {
-	if s.Type == linebot.EventSourceTypeUser {
+	switch s.Type {
+	case linebot.EventSourceTypeUser:
 		return fmt.Sprintf("user|%s", s.UserID), nil
-	} else if s.Type == linebot.EventSourceTypeRoom {
-		return fmt.Sprintf("room|%s", s.RoomID), nil
-	} else if s.Type == linebot.EventSourceTypeGroup {
-		return fmt.Sprintf("group|%s", s.GroupID), nil
-	}
 
-	return "", ErrUnrecognizedEventSource
+	case linebot.EventSourceTypeRoom:
+		return fmt.Sprintf("room|%s", s.RoomID), nil
+
+	case linebot.EventSourceTypeGroup:
+		return fmt.Sprintf("group|%s", s.GroupID), nil
+
+	default:
+		return "", ErrUnrecognizedEventSource
+
+	}
 }
 
 // TextInput represents text message sent from LINE.
