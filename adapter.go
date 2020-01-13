@@ -70,11 +70,23 @@ func WithEventHandler(handler func(context.Context, *Config, []*linebot.Event, f
 	}
 }
 
+// WithServerMux lets developer set mux.
+// Adapter.Run() starts a new HTTP server with http.DefaultServeMux by default when none is set.
+// Setting mux is useful when http.DefaultServeMux cannot be used because another HTTP server is running in the same process
+// and is referring to http.DefaultServeMux.
+func WithServerMux(mux *http.ServeMux) AdapterOption {
+	return func(adapter *Adapter) error {
+		adapter.mux = mux
+		return nil
+	}
+}
+
 // Adapter internally starts HTTP server to receive call from LINE.
 type Adapter struct {
 	client       *linebot.Client
 	eventHandler func(context.Context, *Config, []*linebot.Event, func(sarah.Input) error)
 	config       *Config
+	mux          *http.ServeMux
 }
 
 var _ sarah.Adapter = (*Adapter)(nil)
@@ -101,6 +113,10 @@ func NewAdapter(config *Config, options ...AdapterOption) (*Adapter, error) {
 			return nil, fmt.Errorf("error on linebot.Client construction: %s", err.Error())
 		}
 		adapter.client = client
+	}
+
+	if adapter.mux == nil {
+		adapter.mux = http.DefaultServeMux
 	}
 
 	return adapter, nil
@@ -175,13 +191,13 @@ func (adapter *Adapter) listen(ctx context.Context, enqueueInput func(sarah.Inpu
 		}
 	})
 
-	http.Handle(adapter.config.Endpoint, handler)
+	adapter.mux.Handle(adapter.config.Endpoint, handler)
 	addr := fmt.Sprintf(":%d", adapter.config.Port)
 	if adapter.config.TLS == nil {
-		return http.ListenAndServe(addr, nil)
+		return http.ListenAndServe(addr, adapter.mux)
 	}
 
-	return http.ListenAndServeTLS(addr, adapter.config.TLS.CertFile, adapter.config.TLS.KeyFile, nil)
+	return http.ListenAndServeTLS(addr, adapter.config.TLS.CertFile, adapter.config.TLS.KeyFile, adapter.mux)
 }
 
 func defaultEventHandler(_ context.Context, config *Config, events []*linebot.Event, enqueueInput func(sarah.Input) error) {
